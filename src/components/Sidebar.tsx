@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import AppLogo from '@/components/ui/AppLogo';
-import { LayoutDashboard, TreePine, Settings, ChevronLeft, ChevronRight, PenLine, LogOut } from 'lucide-react';
+import { LayoutDashboard, TreePine, Settings, ChevronLeft, ChevronRight, PenLine, LogOut, Search } from 'lucide-react';
 import Icon from '@/components/ui/AppIcon';
 
 
@@ -24,6 +24,7 @@ const navItems: NavItem[] = [
   { id: 'nav-journal', label: 'Journal', href: '/', icon: PenLine },
   { id: 'nav-plans', label: 'Plans', href: '/plans-dashboard', icon: LayoutDashboard, badge: 3 },
   { id: 'nav-tree', label: 'Idea Tree', href: '/mind-map', icon: TreePine },
+  { id: 'nav-search', label: 'Search', href: '/search', icon: Search },
 ];
 
 const bottomItems: NavItem[] = [

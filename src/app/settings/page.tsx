@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import AppLayout from '@/components/AppLayout';
-import { Mail, Bell, Clock, Check, Save, AlertCircle, ChevronDown, Send, Loader2 } from 'lucide-react';
+import { Mail, Bell, Clock, Check, Save, AlertCircle, ChevronDown, Send, Loader2, History, Inbox } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
@@ -17,7 +17,16 @@ interface SettingsState {
   timezone: string;
 }
 
+interface EmailHistoryEntry {
+  id: string;
+  type: 'journal_reminder' | 'overdue_digest';
+  to: string;
+  sentAt: string;
+  status: 'sent' | 'failed';
+}
+
 const SETTINGS_KEY = 'rootline_email_settings';
+const EMAIL_HISTORY_KEY = 'rootline_email_history';
 
 const TIMEZONES = [
   'America/New_York',
@@ -48,6 +57,7 @@ export default function SettingsPage() {
   const [reminderSendStatus, setReminderSendStatus] = useState<SendStatus>('idle');
   const [digestSendStatus, setDigestSendStatus] = useState<SendStatus>('idle');
   const [tzDropdownOpen, setTzDropdownOpen] = useState(false);
+  const [emailHistory, setEmailHistory] = useState<EmailHistoryEntry[]>([]);
   const tzRef = React.useRef<HTMLDivElement>(null);
 
   // Load persisted settings
@@ -64,6 +74,27 @@ export default function SettingsPage() {
       // ignore
     }
   }, [user]);
+
+  // Load email history
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(EMAIL_HISTORY_KEY);
+      if (stored) {
+        setEmailHistory(JSON.parse(stored) as EmailHistoryEntry[]);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const addEmailHistory = (entry: Omit<EmailHistoryEntry, 'id'>) => {
+    const newEntry: EmailHistoryEntry = { ...entry, id: `email-${Date.now()}` };
+    setEmailHistory((prev) => {
+      const updated = [newEntry, ...prev].slice(0, 50); // keep last 50
+      try { localStorage.setItem(EMAIL_HISTORY_KEY, JSON.stringify(updated)); } catch { /* ignore */ }
+      return updated;
+    });
+  };
 
   React.useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -108,9 +139,11 @@ export default function SettingsPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed');
       setReminderSendStatus('sent');
+      addEmailHistory({ type: 'journal_reminder', to: settings.email, sentAt: new Date().toISOString(), status: 'sent' });
       setTimeout(() => setReminderSendStatus('idle'), 4000);
     } catch {
       setReminderSendStatus('error');
+      addEmailHistory({ type: 'journal_reminder', to: settings.email, sentAt: new Date().toISOString(), status: 'failed' });
       setTimeout(() => setReminderSendStatus('idle'), 4000);
     }
   };
@@ -135,9 +168,11 @@ export default function SettingsPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed');
       setDigestSendStatus('sent');
+      addEmailHistory({ type: 'overdue_digest', to: settings.email, sentAt: new Date().toISOString(), status: 'sent' });
       setTimeout(() => setDigestSendStatus('idle'), 4000);
     } catch {
       setDigestSendStatus('error');
+      addEmailHistory({ type: 'overdue_digest', to: settings.email, sentAt: new Date().toISOString(), status: 'failed' });
       setTimeout(() => setDigestSendStatus('idle'), 4000);
     }
   };
@@ -181,6 +216,12 @@ export default function SettingsPage() {
         : label}
     </button>
   );
+
+  const formatHistoryDate = (iso: string) => {
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) +
+      ' at ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  };
 
   return (
     <AppLayout>
@@ -249,145 +290,112 @@ export default function SettingsPage() {
                 style={{ width: '40px', borderRight: '2px solid rgba(192,57,43,0.35)', backgroundColor: 'rgba(250,247,240,0.5)' }}
               />
               <div className="flex-1 p-5">
-                <p className="text-xs text-muted-foreground mb-4 leading-relaxed">
-                  Sends a gentle nudge if you haven't written an entry that day. Arrives at the time you set below.
-                </p>
-
-                {/* Toggle */}
                 <div className="flex items-center justify-between mb-4">
                   <div>
-                    <p className="text-sm font-medium text-foreground">Enable reminder</p>
-                    <p className="text-xs text-muted-foreground">Receive a daily email prompt to journal</p>
+                    <p className="text-sm font-medium text-foreground">Enable daily reminder</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Get a nudge to write in your journal each day.</p>
                   </div>
                   <button
                     onClick={() => update('reminderEnabled', !settings.reminderEnabled)}
-                    className="relative rounded-full transition-all duration-200 flex-shrink-0"
+                    className={`relative w-10 h-5.5 rounded-full transition-all duration-200 ${settings.reminderEnabled ? '' : ''}`}
                     style={{
                       backgroundColor: settings.reminderEnabled ? 'var(--primary)' : 'var(--muted)',
-                      width: '40px',
-                      height: '22px',
+                      width: '40px', height: '22px',
                     }}
                     aria-label="Toggle daily reminder"
                   >
                     <span
-                      className="absolute top-0.5 rounded-full transition-all duration-200"
+                      className="absolute top-0.5 left-0.5 w-4.5 h-4.5 rounded-full bg-white shadow transition-all duration-200"
                       style={{
-                        width: '18px',
-                        height: '18px',
-                        backgroundColor: 'white',
-                        left: settings.reminderEnabled ? '20px' : '2px',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                        width: '18px', height: '18px',
+                        transform: settings.reminderEnabled ? 'translateX(18px)' : 'translateX(0)',
                       }}
                     />
                   </button>
                 </div>
-
-                {/* Time picker + test button */}
-                <div className={`transition-opacity duration-200 ${settings.reminderEnabled ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
-                  <label className="block text-xs font-medium text-foreground mb-1.5">
-                    <Clock size={11} className="inline mr-1 text-muted-foreground" />
-                    Reminder time
-                  </label>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="time"
-                      value={settings.reminderTime}
-                      onChange={(e) => update('reminderTime', e.target.value)}
-                      className="px-3 py-2 rounded-lg border border-border text-sm focus:outline-none focus:ring-1 focus:ring-ring transition-all"
-                      style={{ backgroundColor: 'var(--input)', color: 'var(--foreground)' }}
-                    />
-                    <SendButton
-                      status={reminderSendStatus}
-                      onClick={sendTestReminder}
-                      label="Send test email"
-                    />
+                <div className="flex items-center gap-3">
+                  <div className="flex-1">
+                    <label className="block text-xs font-medium text-foreground mb-1.5">Send time</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="time"
+                        value={settings.reminderTime}
+                        onChange={(e) => update('reminderTime', e.target.value)}
+                        disabled={!settings.reminderEnabled}
+                        className="px-3 py-2 rounded-lg border border-border text-sm focus:outline-none focus:ring-1 focus:ring-ring transition-all disabled:opacity-50"
+                        style={{ backgroundColor: 'var(--input)', color: 'var(--foreground)' }}
+                      />
+                      <SendButton status={reminderSendStatus} onClick={sendTestReminder} label="Send test" />
+                    </div>
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1.5">Default: 9:00 PM</p>
                 </div>
               </div>
             </div>
           </section>
 
-          {/* Plan digest section */}
+          {/* Overdue digest */}
           <section className="notebook-card mb-5">
             <div
               className="flex items-center px-4 py-2 border-b border-border/40"
               style={{ backgroundColor: 'rgba(92,61,46,0.04)' }}
             >
               <div className="flex items-center gap-2">
-                <AlertCircle size={13} className="text-primary" />
-                <span className="text-xs font-semibold text-foreground">Plan Digest Email</span>
+                <Clock size={13} className="text-primary" />
+                <span className="text-xs font-semibold text-foreground">Overdue Plan Digest</span>
               </div>
               <span className="ml-auto text-xs text-muted-foreground font-serif italic">Rootline</span>
             </div>
-
             <div className="flex">
               <div
                 className="flex-shrink-0"
                 style={{ width: '40px', borderRight: '2px solid rgba(192,57,43,0.35)', backgroundColor: 'rgba(250,247,240,0.5)' }}
               />
               <div className="flex-1 p-5">
-                <p className="text-xs text-muted-foreground mb-4 leading-relaxed">
-                  A daily summary of plan entries that are overdue or due within the next 24 hours. Keeps your commitments visible.
-                </p>
-
-                {/* Toggle */}
                 <div className="flex items-center justify-between mb-4">
                   <div>
-                    <p className="text-sm font-medium text-foreground">Enable digest</p>
-                    <p className="text-xs text-muted-foreground">Daily email of overdue and upcoming plans</p>
+                    <p className="text-sm font-medium text-foreground">Enable overdue digest</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Receive a morning summary of overdue plans.</p>
                   </div>
                   <button
                     onClick={() => update('digestEnabled', !settings.digestEnabled)}
-                    className="relative rounded-full transition-all duration-200 flex-shrink-0"
                     style={{
                       backgroundColor: settings.digestEnabled ? 'var(--primary)' : 'var(--muted)',
-                      width: '40px',
-                      height: '22px',
+                      width: '40px', height: '22px',
                     }}
-                    aria-label="Toggle plan digest"
+                    className="relative rounded-full transition-all duration-200"
+                    aria-label="Toggle overdue digest"
                   >
                     <span
-                      className="absolute top-0.5 rounded-full transition-all duration-200"
+                      className="absolute top-0.5 left-0.5 rounded-full bg-white shadow transition-all duration-200"
                       style={{
-                        width: '18px',
-                        height: '18px',
-                        backgroundColor: 'white',
-                        left: settings.digestEnabled ? '20px' : '2px',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                        width: '18px', height: '18px',
+                        transform: settings.digestEnabled ? 'translateX(18px)' : 'translateX(0)',
                       }}
                     />
                   </button>
                 </div>
-
-                {/* Digest time + test button */}
-                <div className={`transition-opacity duration-200 ${settings.digestEnabled ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
-                  <label className="block text-xs font-medium text-foreground mb-1.5">
-                    <Clock size={11} className="inline mr-1 text-muted-foreground" />
-                    Digest delivery time
-                  </label>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="time"
-                      value={settings.digestTime}
-                      onChange={(e) => update('digestTime', e.target.value)}
-                      className="px-3 py-2 rounded-lg border border-border text-sm focus:outline-none focus:ring-1 focus:ring-ring transition-all"
-                      style={{ backgroundColor: 'var(--input)', color: 'var(--foreground)' }}
-                    />
-                    <SendButton
-                      status={digestSendStatus}
-                      onClick={sendTestDigest}
-                      label="Send test digest"
-                    />
+                <div className="flex items-center gap-3">
+                  <div className="flex-1">
+                    <label className="block text-xs font-medium text-foreground mb-1.5">Send time</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="time"
+                        value={settings.digestTime}
+                        onChange={(e) => update('digestTime', e.target.value)}
+                        disabled={!settings.digestEnabled}
+                        className="px-3 py-2 rounded-lg border border-border text-sm focus:outline-none focus:ring-1 focus:ring-ring transition-all disabled:opacity-50"
+                        style={{ backgroundColor: 'var(--input)', color: 'var(--foreground)' }}
+                      />
+                      <SendButton status={digestSendStatus} onClick={sendTestDigest} label="Send test digest" />
+                    </div>
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1.5">Default: 8:00 AM</p>
                 </div>
               </div>
             </div>
           </section>
 
-          {/* Timezone section */}
-          <section className="notebook-card mb-8">
+          {/* Timezone */}
+          <section className="notebook-card mb-6">
             <div
               className="flex items-center px-4 py-2 border-b border-border/40"
               style={{ backgroundColor: 'rgba(92,61,46,0.04)' }}
@@ -398,7 +406,6 @@ export default function SettingsPage() {
               </div>
               <span className="ml-auto text-xs text-muted-foreground font-serif italic">Rootline</span>
             </div>
-
             <div className="flex">
               <div
                 className="flex-shrink-0"
@@ -406,31 +413,30 @@ export default function SettingsPage() {
               />
               <div className="flex-1 p-5">
                 <p className="text-xs text-muted-foreground mb-3 leading-relaxed">
-                  All reminder and digest emails will be sent at the times above, adjusted for this timezone.
+                  Used to schedule your reminders and digests at the right local time.
                 </p>
-                <div className="relative" ref={tzRef}>
+                <div ref={tzRef} className="relative">
                   <button
                     onClick={() => setTzDropdownOpen(!tzDropdownOpen)}
-                    className="flex items-center justify-between w-full px-3 py-2.5 rounded-lg border border-border text-sm transition-all hover:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+                    className="flex items-center justify-between w-full px-3 py-2.5 rounded-lg border border-border text-sm transition-all focus:outline-none focus:ring-1 focus:ring-ring"
                     style={{ backgroundColor: 'var(--input)', color: 'var(--foreground)' }}
                   >
                     <span>{settings.timezone}</span>
-                    <ChevronDown size={13} className="text-muted-foreground" />
+                    <ChevronDown size={14} className={`text-muted-foreground transition-transform ${tzDropdownOpen ? 'rotate-180' : ''}`} />
                   </button>
                   {tzDropdownOpen && (
                     <div
-                      className="absolute top-full left-0 right-0 mt-1 rounded-xl border border-border shadow-card-md z-20 fade-in overflow-hidden"
+                      className="absolute z-20 mt-1 w-full rounded-lg border border-border shadow-lg overflow-hidden"
                       style={{ backgroundColor: 'var(--card)' }}
                     >
                       {TIMEZONES.map((tz) => (
                         <button
                           key={tz}
                           onClick={() => { update('timezone', tz); setTzDropdownOpen(false); }}
-                          className="w-full flex items-center justify-between px-3 py-2.5 text-sm text-left hover:bg-muted/60 transition-all"
-                          style={settings.timezone === tz ? { backgroundColor: 'rgba(92,61,46,0.07)', color: 'var(--primary)' } : { color: 'var(--foreground)' }}
+                          className={`w-full text-left px-3 py-2 text-sm transition-colors hover:bg-muted/60 ${settings.timezone === tz ? 'font-medium' : ''}`}
+                          style={{ color: settings.timezone === tz ? 'var(--primary)' : 'var(--foreground)' }}
                         >
                           {tz}
-                          {settings.timezone === tz && <Check size={12} className="text-primary" />}
                         </button>
                       ))}
                     </div>
@@ -441,31 +447,84 @@ export default function SettingsPage() {
           </section>
 
           {/* Save button */}
-          <div className="flex items-center justify-between">
-            <div className="text-xs text-muted-foreground">
-              {saveStatus === 'saved' && (
-                <span className="flex items-center gap-1 text-success fade-in">
-                  <Check size={12} />
-                  Settings saved
-                </span>
-              )}
-              {saveStatus === 'error' && (
-                <span className="flex items-center gap-1 fade-in" style={{ color: 'var(--overdue)' }}>
-                  <AlertCircle size={12} />
-                  Failed to save
-                </span>
-              )}
-            </div>
+          <div className="flex justify-end mb-8">
             <button
               onClick={handleSave}
               disabled={saveStatus === 'saving'}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 hover:opacity-90 active:scale-95 disabled:opacity-60"
+              className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 hover:opacity-90 active:scale-95 disabled:opacity-60"
               style={{ backgroundColor: 'var(--primary)', color: 'var(--primary-foreground)' }}
             >
-              <Save size={13} />
-              {saveStatus === 'saving' ? 'Saving…' : 'Save settings'}
+              {saveStatus === 'saving' ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : saveStatus === 'saved' ? (
+                <Check size={14} />
+              ) : saveStatus === 'error' ? (
+                <AlertCircle size={14} />
+              ) : (
+                <Save size={14} />
+              )}
+              {saveStatus === 'saving' ? 'Saving…' : saveStatus === 'saved' ? 'Saved!' : saveStatus === 'error' ? 'Error saving' : 'Save settings'}
             </button>
           </div>
+
+          {/* Email History section */}
+          <section className="notebook-card mb-5">
+            <div
+              className="flex items-center px-4 py-2 border-b border-border/40"
+              style={{ backgroundColor: 'rgba(92,61,46,0.04)' }}
+            >
+              <div className="flex items-center gap-2">
+                <History size={13} className="text-primary" />
+                <span className="text-xs font-semibold text-foreground">Email History</span>
+              </div>
+              <span className="ml-auto text-xs text-muted-foreground font-serif italic">Last 50 emails</span>
+            </div>
+            <div className="flex">
+              <div
+                className="flex-shrink-0"
+                style={{ width: '40px', borderRight: '2px solid rgba(192,57,43,0.35)', backgroundColor: 'rgba(250,247,240,0.5)' }}
+              />
+              <div className="flex-1">
+                {emailHistory.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-10 px-5 text-center">
+                    <Inbox size={22} className="text-muted-foreground mb-2 opacity-40" />
+                    <p className="text-sm text-muted-foreground">No emails sent yet.</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Use the test buttons above to send your first email.</p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-border/60">
+                    {emailHistory.map((entry) => (
+                      <div key={entry.id} className="flex items-center gap-3 px-5 py-3">
+                        {/* Status dot */}
+                        <div
+                          className="w-2 h-2 rounded-full flex-shrink-0"
+                          style={{ backgroundColor: entry.status === 'sent' ? '#16a34a' : 'var(--overdue)' }}
+                        />
+                        {/* Type label */}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-foreground">
+                            {entry.type === 'journal_reminder' ? 'Journal Reminder' : 'Overdue Digest'}
+                          </p>
+                          <p className="text-xs text-muted-foreground truncate">To: {entry.to}</p>
+                        </div>
+                        {/* Date + status */}
+                        <div className="flex-shrink-0 text-right">
+                          <p className="text-xs text-muted-foreground">{formatHistoryDate(entry.sentAt)}</p>
+                          <span
+                            className="text-xs font-medium"
+                            style={{ color: entry.status === 'sent' ? '#16a34a' : 'var(--overdue)' }}
+                          >
+                            {entry.status === 'sent' ? 'Sent' : 'Failed'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+
         </div>
       </div>
     </AppLayout>

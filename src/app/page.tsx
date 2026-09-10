@@ -5,7 +5,7 @@ import AppLayout from '@/components/AppLayout';
 import EntryListSidebar from './components/EntryListSidebar';
 import EditorPanel from './components/EditorPanel';
 import LinkPanel from './components/LinkPanel';
-import { createClient } from '../lib/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
 
 export type EntryTag = 'idea' | 'thought' | 'plan';
 
@@ -38,20 +38,14 @@ export default function JournalEntryPage() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const supabase = createClient();
+  const { supabase, loading: authLoading } = useAuth();
 
   // Load entries from Supabase
-  const loadEntries = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      setLoading(false);
-      return;
-    }
-
+  const loadEntries = useCallback(async (currentSelectedId?: string | null) => {
+    if (!supabase) return;
     const { data, error } = await supabase
       .from('journal_entries')
       .select('*')
-      .eq('user_id', user.id)
       .order('date', { ascending: false })
       .order('created_at', { ascending: false });
 
@@ -73,22 +67,21 @@ export default function JournalEntryPage() {
     }));
 
     setEntries(mapped);
-    if (mapped.length > 0 && !selectedEntryId) {
+    if (mapped.length > 0 && !currentSelectedId) {
       setSelectedEntryId(mapped[0].id);
     }
     setLoading(false);
-  }, []);
+  }, [supabase]);
 
   useEffect(() => {
-    loadEntries();
-  }, [loadEntries]);
+    if (!authLoading && supabase) {
+      loadEntries(null);
+    }
+  }, [authLoading, supabase, loadEntries]);
 
   const selectedEntry = entries.find((e) => e.id === selectedEntryId) ?? entries[0] ?? null;
 
-  const handleNewEntry = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
+  const handleNewEntry = useCallback(async () => {
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0];
     const id = `entry-${Date.now()}`;
@@ -102,9 +95,13 @@ export default function JournalEntryPage() {
       isToday: true,
     };
 
+    // Optimistically add to local state immediately so editor opens right away
+    setEntries((prev) => [newEntry, ...prev]);
+    setSelectedEntryId(id);
+
+    // Persist to Supabase in the background
     const { error } = await supabase.from('journal_entries').insert({
       id: newEntry.id,
-      user_id: user.id,
       title: newEntry.title,
       body: newEntry.body,
       tag: newEntry.tag,
@@ -115,24 +112,20 @@ export default function JournalEntryPage() {
     });
 
     if (error) {
-      console.error('Failed to create entry:', error.message);
-      return;
+      console.error('Failed to persist entry:', error.message);
+      // Remove the optimistic entry on failure
+      setEntries((prev) => prev.filter((e) => e.id !== id));
+      setSelectedEntryId(null);
     }
+  }, [supabase]);
 
-    setEntries((prev) => [newEntry, ...prev]);
-    setSelectedEntryId(id);
-  };
-
-  const handleUpdateEntry = async (updated: Partial<JournalEntry>) => {
+  const handleUpdateEntry = useCallback(async (updated: Partial<JournalEntry>) => {
     if (!selectedEntryId) return;
 
     // Optimistic update
     setEntries((prev) =>
       prev.map((e) => (e.id === selectedEntryId ? { ...e, ...updated } : e))
     );
-
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
 
     const dbUpdate: Record<string, unknown> = {};
     if (updated.title !== undefined) dbUpdate.title = updated.title;
@@ -144,15 +137,14 @@ export default function JournalEntryPage() {
     const { error } = await supabase
       .from('journal_entries')
       .update(dbUpdate)
-      .eq('id', selectedEntryId)
-      .eq('user_id', user.id);
+      .eq('id', selectedEntryId);
 
     if (error) {
       console.error('Failed to update entry:', error.message);
     }
-  };
+  }, [supabase, selectedEntryId]);
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <AppLayout onNewEntry={handleNewEntry}>
         <div className="flex h-full items-center justify-center">
