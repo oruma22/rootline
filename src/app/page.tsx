@@ -87,7 +87,10 @@ export default function JournalEntryPage() {
   const selectedEntry = entries.find((e) => e.id === selectedEntryId) ?? entries[0] ?? null;
 
   const handleNewEntry = useCallback(async () => {
-    if (!user) return;
+    if (!user) {
+      console.error('Cannot create entry: user not authenticated');
+      return;
+    }
 
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0];
@@ -102,6 +105,11 @@ export default function JournalEntryPage() {
       isToday: true,
     };
 
+    // Optimistically add to local state immediately so editor opens right away
+    setEntries((prev) => [newEntry, ...prev]);
+    setSelectedEntryId(id);
+
+    // Persist to Supabase in the background
     const { error } = await supabase.from('journal_entries').insert({
       id: newEntry.id,
       user_id: user.id,
@@ -115,12 +123,11 @@ export default function JournalEntryPage() {
     });
 
     if (error) {
-      console.error('Failed to create entry:', error.message);
-      return;
+      console.error('Failed to persist entry:', error.message);
+      // Remove the optimistic entry on failure
+      setEntries((prev) => prev.filter((e) => e.id !== id));
+      setSelectedEntryId(null);
     }
-
-    setEntries((prev) => [newEntry, ...prev]);
-    setSelectedEntryId(id);
   }, [supabase, user]);
 
   const handleUpdateEntry = useCallback(async (updated: Partial<JournalEntry>) => {
