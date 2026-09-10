@@ -239,6 +239,7 @@ export default function JournalEntryPage() {
     if (!supabase) return;
     const { error } = await supabase.from('journal_entries').insert({
       id: newEntry.id,
+      ...(user ? { user_id: user.id } : {}),
       title: newEntry.title,
       body: newEntry.body,
       tag: newEntry.tag,
