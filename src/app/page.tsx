@@ -100,6 +100,7 @@ export default function JournalEntryPage() {
     setSelectedEntryId(id);
 
     // Persist to Supabase in the background
+    if (!supabase) return;
     const { error } = await supabase.from('journal_entries').insert({
       id: newEntry.id,
       title: newEntry.title,
