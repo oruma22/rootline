@@ -38,11 +38,14 @@ export default function JournalEntryPage() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const { supabase, loading: authLoading } = useAuth();
+  const { supabase } = useAuth();
 
   // Load entries from Supabase
   const loadEntries = useCallback(async (currentSelectedId?: string | null) => {
-    if (!supabase) return;
+    if (!supabase) {
+      setLoading(false);
+      return;
+    }
     const { data, error } = await supabase
       .from('journal_entries')
       .select('*')
@@ -74,10 +77,8 @@ export default function JournalEntryPage() {
   }, [supabase]);
 
   useEffect(() => {
-    if (!authLoading && supabase) {
-      loadEntries(null);
-    }
-  }, [authLoading, supabase, loadEntries]);
+    loadEntries(null);
+  }, [loadEntries]);
 
   const selectedEntry = entries.find((e) => e.id === selectedEntryId) ?? entries[0] ?? null;
 
@@ -121,7 +122,7 @@ export default function JournalEntryPage() {
   }, [supabase]);
 
   const handleUpdateEntry = useCallback(async (updated: Partial<JournalEntry>) => {
-    if (!selectedEntryId) return;
+    if (!selectedEntryId || !supabase) return;
 
     // Optimistic update
     setEntries((prev) =>
@@ -145,7 +146,7 @@ export default function JournalEntryPage() {
     }
   }, [supabase, selectedEntryId]);
 
-  if (authLoading || loading) {
+  if (loading) {
     return (
       <AppLayout onNewEntry={handleNewEntry}>
         <div className="flex h-full items-center justify-center">
