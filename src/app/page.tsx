@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import AppLayout from '@/components/AppLayout';
 import EntryListSidebar from './components/EntryListSidebar';
 import EditorPanel from './components/EditorPanel';
@@ -38,10 +38,10 @@ export default function JournalEntryPage() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   // Load entries from Supabase
-  const loadEntries = useCallback(async () => {
+  const loadEntries = useCallback(async (currentSelectedId?: string | null) => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       setLoading(false);
@@ -73,19 +73,19 @@ export default function JournalEntryPage() {
     }));
 
     setEntries(mapped);
-    if (mapped.length > 0 && !selectedEntryId) {
+    if (mapped.length > 0 && !currentSelectedId) {
       setSelectedEntryId(mapped[0].id);
     }
     setLoading(false);
-  }, []);
+  }, [supabase]);
 
   useEffect(() => {
-    loadEntries();
+    loadEntries(null);
   }, [loadEntries]);
 
   const selectedEntry = entries.find((e) => e.id === selectedEntryId) ?? entries[0] ?? null;
 
-  const handleNewEntry = async () => {
+  const handleNewEntry = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
@@ -121,9 +121,9 @@ export default function JournalEntryPage() {
 
     setEntries((prev) => [newEntry, ...prev]);
     setSelectedEntryId(id);
-  };
+  }, [supabase]);
 
-  const handleUpdateEntry = async (updated: Partial<JournalEntry>) => {
+  const handleUpdateEntry = useCallback(async (updated: Partial<JournalEntry>) => {
     if (!selectedEntryId) return;
 
     // Optimistic update
@@ -150,7 +150,7 @@ export default function JournalEntryPage() {
     if (error) {
       console.error('Failed to update entry:', error.message);
     }
-  };
+  }, [supabase, selectedEntryId]);
 
   if (loading) {
     return (
