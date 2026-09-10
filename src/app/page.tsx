@@ -42,6 +42,7 @@ export default function JournalEntryPage() {
 
   // Load entries from Supabase
   const loadEntries = useCallback(async (currentSelectedId?: string | null) => {
+    if (!supabase) return;
     const { data, error } = await supabase
       .from('journal_entries')
       .select('*')
@@ -73,10 +74,10 @@ export default function JournalEntryPage() {
   }, [supabase]);
 
   useEffect(() => {
-    if (!authLoading) {
+    if (!authLoading && supabase) {
       loadEntries(null);
     }
-  }, [authLoading, loadEntries]);
+  }, [authLoading, supabase, loadEntries]);
 
   const selectedEntry = entries.find((e) => e.id === selectedEntryId) ?? entries[0] ?? null;
 
