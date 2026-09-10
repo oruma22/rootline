@@ -27,21 +27,6 @@ interface EdgeLink {
   relation: LinkRelation;
 }
 
-const COLUMN_X = 80;
-const COLUMN_START_Y = 40;
-const COLUMN_GAP = 120;
-
-const initialNodes: NodeEntry[] = [
-  { id: 'entry-001', title: "Today's thoughts", body: "Been thinking about the recursive nature of habits — how one small ritual creates the conditions for another, and another, until the whole architecture of a day is built from these tiny, repeated choices.", tag: 'thought', dateLabel: 'Today', x: COLUMN_X, y: COLUMN_START_Y + COLUMN_GAP * 0 },
-  { id: 'entry-002', title: 'Deep work blocks', body: 'What if I restructured my mornings to protect 3 hours of uninterrupted deep work? The key is treating it like a meeting with yourself — non-negotiable, calendar-blocked, phone in another room.', tag: 'plan', dateLabel: 'Yesterday', x: COLUMN_X, y: COLUMN_START_Y + COLUMN_GAP * 1 },
-  { id: 'entry-003', title: 'The attention economy', body: "Every app competes for the same resource. But journaling is the opposite — it gives attention back to yourself. There's something radical about that in 2026.", tag: 'idea', dateLabel: 'Sep 8', x: COLUMN_X, y: COLUMN_START_Y + COLUMN_GAP * 2 },
-  { id: 'entry-005', title: 'On solitude', body: "Rainer Maria Rilke wrote that solitude is necessary for creation. I wonder if he meant the absence of people, or the absence of noise. They're not the same thing.", tag: 'thought', dateLabel: 'Sep 6', x: COLUMN_X, y: COLUMN_START_Y + COLUMN_GAP * 3 },
-  { id: 'entry-006', title: 'Side project: Mosaic', body: "The idea for a spatial note-taking tool has been circling back. Key insight: the problem isn't capturing ideas, it's seeing how they relate.", tag: 'idea', dateLabel: 'Sep 5', x: COLUMN_X, y: COLUMN_START_Y + COLUMN_GAP * 4 },
-  { id: 'entry-007', title: 'Weekly review habit', body: "Set up a recurring Sunday evening ritual to review the week's entries. Look for patterns, unfinished thoughts, plans that slipped.", tag: 'plan', dateLabel: 'Sep 4', x: COLUMN_X, y: COLUMN_START_Y + COLUMN_GAP * 5 },
-  { id: 'entry-008', title: 'Memory and narrative', body: "We don't remember events — we remember the stories we tell about them. Every time we recall something, we rewrite it slightly.", tag: 'thought', dateLabel: 'Sep 3', x: COLUMN_X, y: COLUMN_START_Y + COLUMN_GAP * 6 },
-  { id: 'entry-009', title: 'Analog vs digital', body: "The friction of pen and paper forces slower, more deliberate thought. But the searchability of digital is irreplaceable.", tag: 'idea', dateLabel: 'Sep 2', x: COLUMN_X, y: COLUMN_START_Y + COLUMN_GAP * 7 },
-];
-
 const NODE_W = 160;
 const NODE_H = 90;
 
@@ -52,7 +37,7 @@ const tagNoteStyle: Record<EntryTag, { bg: string; border: string; ring: string 
 };
 
 export default function MindMapPage() {
-  const [nodes, setNodes] = useState<NodeEntry[]>(initialNodes);
+  const [nodes, setNodes] = useState<NodeEntry[]>([]);
   const [edges, setEdges] = useState<EdgeLink[]>([]);
   const [graphLoaded, setGraphLoaded] = useState(false);
 
@@ -83,16 +68,28 @@ export default function MindMapPage() {
     if (!user) return;
 
     const load = async () => {
-      // Load node positions
-      const { data: nodeRows } = await supabase
+      // Load full node data from idea_tree_nodes
+      const { data: nodeRows, error: nodeErr } = await supabase
         .from('idea_tree_nodes')
-        .select('id, x, y')
+        .select('id, title, body, tag, date_label, x, y')
         .eq('user_id', user.id);
 
+      if (nodeErr) {
+        console.error('Failed to load idea_tree_nodes:', nodeErr.message);
+      }
+
       if (nodeRows && nodeRows.length > 0) {
-        const posMap: Record<string, { x: number; y: number }> = {};
-        nodeRows.forEach((r) => { posMap[r.id] = { x: r.x, y: r.y }; });
-        setNodes(initialNodes.map((n) => posMap[n.id] ? { ...n, x: posMap[n.id].x, y: posMap[n.id].y } : n));
+        setNodes(
+          nodeRows.map((r) => ({
+            id: r.id,
+            title: r.title ?? '',
+            body: r.body ?? '',
+            tag: (r.tag ?? 'thought') as EntryTag,
+            dateLabel: r.date_label ?? '',
+            x: r.x ?? 80,
+            y: r.y ?? 40,
+          }))
+        );
       }
 
       // Load edges
@@ -114,7 +111,7 @@ export default function MindMapPage() {
     };
 
     load();
-  }, [user]);
+  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Persist node positions (debounced) ─────────────────────────────────────
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -141,7 +138,7 @@ export default function MindMapPage() {
     return () => {
       if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
     };
-  }, [nodes, user, graphLoaded]);
+  }, [nodes, user, graphLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Persist edges whenever they change ─────────────────────────────────────
   const prevEdgesRef = useRef<EdgeLink[]>([]);
@@ -152,9 +149,7 @@ export default function MindMapPage() {
     const prevIds = new Set(prev.map((e) => e.id));
     const currIds = new Set(edges.map((e) => e.id));
 
-    // Find added edges
     const added = edges.filter((e) => !prevIds.has(e.id));
-    // Find removed edge ids
     const removedIds = prev.filter((e) => !currIds.has(e.id)).map((e) => e.id);
 
     const persist = async () => {
@@ -180,7 +175,7 @@ export default function MindMapPage() {
 
     persist();
     prevEdgesRef.current = edges;
-  }, [edges, user, graphLoaded]);
+  }, [edges, user, graphLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const getNodeById = (id: string) => nodes.find((n) => n.id === id);
 
@@ -206,13 +201,11 @@ export default function MindMapPage() {
     return `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`;
   };
 
-  // Check if two nodes are already linked
   const getEdgeBetween = (idA: string, idB: string) =>
     edges.find(
       (e) => (e.from === idA && e.to === idB) || (e.from === idB && e.to === idA)
     );
 
-  // Node mouse down — start drag
   const handleNodeMouseDown = (e: React.MouseEvent, nodeId: string) => {
     e.stopPropagation();
     const node = nodes.find((n) => n.id === nodeId);
@@ -223,14 +216,12 @@ export default function MindMapPage() {
     setDidDrag(false);
   };
 
-  // Node click — toggle selection
   const handleNodeClick = (e: React.MouseEvent, node: NodeEntry) => {
     e.stopPropagation();
-    if (didDrag) return; // was a drag, not a click
+    if (didDrag) return;
 
     setSelectedIds((prev) => {
       if (prev.includes(node.id)) {
-        // Deselect
         const next = prev.filter((id) => id !== node.id);
         setLinkPickerVisible(false);
         return next;
@@ -243,13 +234,11 @@ export default function MindMapPage() {
         setLinkPickerVisible(true);
         return next;
       }
-      // Already 2 selected — replace with just this one
       setLinkPickerVisible(false);
       return [node.id];
     });
   };
 
-  // Double-click node → open detail modal
   const handleNodeDoubleClick = (e: React.MouseEvent, node: NodeEntry) => {
     e.stopPropagation();
     setSelectedEntry(node);
@@ -257,12 +246,10 @@ export default function MindMapPage() {
     setLinkPickerVisible(false);
   };
 
-  // Connect the two selected nodes
   const connectNodes = (relation: LinkRelation) => {
     if (selectedIds.length !== 2) return;
     const [a, b] = selectedIds;
     if (getEdgeBetween(a, b)) {
-      // Already linked — do nothing
       setSelectedIds([]);
       setLinkPickerVisible(false);
       return;
@@ -278,7 +265,6 @@ export default function MindMapPage() {
     setLinkPickerVisible(false);
   };
 
-  // Disconnect the two selected nodes
   const disconnectNodes = () => {
     if (selectedIds.length !== 2) return;
     const [a, b] = selectedIds;
@@ -291,14 +277,12 @@ export default function MindMapPage() {
     setLinkPickerVisible(false);
   };
 
-  // Remove edge by clicking on it
   const handleEdgeClick = (edgeId: string) => {
     setEdges((prev) => prev.filter((e) => e.id !== edgeId));
     setSelectedIds([]);
     setLinkPickerVisible(false);
   };
 
-  // Canvas mouse down — start pan
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
     const target = e.target as Element;
     const isCanvas =
@@ -307,7 +291,6 @@ export default function MindMapPage() {
     if (isCanvas) {
       setIsPanning(true);
       setPanStart({ x: e.clientX, y: e.clientY });
-      // Clicking empty canvas clears selection
       setSelectedIds([]);
       setLinkPickerVisible(false);
     }
@@ -355,7 +338,6 @@ export default function MindMapPage() {
     if (!rect) return;
 
     if (e.ctrlKey || e.metaKey) {
-      // Ctrl/Cmd + scroll → zoom
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
       const delta = e.deltaY > 0 ? 0.9 : 1.1;
@@ -369,7 +351,6 @@ export default function MindMapPage() {
         };
       });
     } else {
-      // Normal scroll → pan the canvas
       const scrollSpeed = 1.2;
       setTransform((t) => ({
         ...t,
@@ -383,7 +364,6 @@ export default function MindMapPage() {
   const zoomOut = () => setTransform((t) => ({ ...t, scale: Math.max(t.scale * 0.8, 0.3) }));
   const resetView = () => setTransform({ x: 60, y: 40, scale: 1 });
 
-  // Determine status of the two selected nodes
   const twoSelected = selectedIds.length === 2;
   const alreadyLinked = twoSelected ? !!getEdgeBetween(selectedIds[0], selectedIds[1]) : false;
 
@@ -485,6 +465,16 @@ export default function MindMapPage() {
           onMouseDown={handleCanvasMouseDown}
           onWheel={handleWheel}
         >
+          {/* Empty state */}
+          {graphLoaded && nodes.length === 0 && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div className="text-center">
+                <p className="text-sm text-muted-foreground font-serif">No entries yet</p>
+                <p className="text-xs text-muted-foreground mt-1">Create journal entries to see them appear here</p>
+              </div>
+            </div>
+          )}
+
           <svg
             ref={canvasRef}
             width="100%"
@@ -506,12 +496,10 @@ export default function MindMapPage() {
                 const toNode = getNodeById(edge.to);
                 if (!fromNode || !toNode) return null;
                 const isBranched = edge.relation === 'branched';
-                // Highlight edge if both endpoints are selected
                 const isHighlighted =
                   selectedIds.includes(edge.from) && selectedIds.includes(edge.to);
                 return (
                   <g key={edge.id}>
-                    {/* Invisible wider hit area */}
                     <path
                       d={getEdgePath(fromNode, toNode)}
                       stroke="transparent"
@@ -520,7 +508,6 @@ export default function MindMapPage() {
                       style={{ cursor: 'pointer' }}
                       onClick={() => handleEdgeClick(edge.id)}
                     />
-                    {/* Visible edge */}
                     <path
                       d={getEdgePath(fromNode, toNode)}
                       stroke={
@@ -536,7 +523,6 @@ export default function MindMapPage() {
                       markerEnd={isBranched ? 'url(#arrow-branched)' : 'url(#arrow-related)'}
                       style={{ pointerEvents: 'none' }}
                     />
-                    {/* Delete hint on highlighted edge */}
                     {isHighlighted && (() => {
                       const fx = fromNode.x + NODE_W / 2;
                       const fy = fromNode.y + NODE_H / 2;
@@ -597,7 +583,6 @@ export default function MindMapPage() {
                         fontFamily: 'DM Sans, sans-serif',
                       }}
                     >
-                      {/* Tag dot + date */}
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <span style={{
                           width: '7px', height: '7px', borderRadius: '50%', flexShrink: 0,
@@ -617,7 +602,6 @@ export default function MindMapPage() {
                           </span>
                         )}
                       </div>
-                      {/* Title */}
                       <p style={{
                         fontSize: '12px', fontWeight: 600, color: '#2C1810',
                         lineHeight: '16px', overflow: 'hidden',
@@ -626,7 +610,6 @@ export default function MindMapPage() {
                       }}>
                         {node.title || 'Untitled entry'}
                       </p>
-                      {/* Body preview */}
                       <p style={{
                         fontSize: '10px', color: '#8B7355', lineHeight: '14px',
                         overflow: 'hidden', display: '-webkit-box',
@@ -687,7 +670,6 @@ export default function MindMapPage() {
             style={{ maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Binding */}
             <div
               className="flex items-center gap-0 px-4 py-2 border-b border-border/40 flex-shrink-0"
               style={{ backgroundColor: 'rgba(92,61,46,0.04)' }}
@@ -702,15 +684,12 @@ export default function MindMapPage() {
               <span className="ml-auto text-xs text-muted-foreground font-serif italic">Rootline</span>
             </div>
 
-            {/* Content */}
             <div className="flex overflow-hidden flex-1">
-              {/* Margin */}
               <div
                 className="flex-shrink-0"
                 style={{ width: '40px', borderRight: '2px solid rgba(192,57,43,0.35)', backgroundColor: 'rgba(250,247,240,0.5)' }}
               />
               <div className="flex-1 overflow-y-auto custom-scroll p-5">
-                {/* Meta row */}
                 <div className="flex items-center gap-2 mb-3">
                   <StatusBadge status={selectedEntry.tag} />
                   <span className="text-xs text-muted-foreground">{selectedEntry.dateLabel}</span>
@@ -729,7 +708,6 @@ export default function MindMapPage() {
                   {selectedEntry.body}
                 </p>
 
-                {/* Connections for this node */}
                 {(() => {
                   const connected = edges
                     .filter((e) => e.from === selectedEntry.id || e.to === selectedEntry.id)

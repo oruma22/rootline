@@ -17,9 +17,11 @@ const tagOptions: { id: string; value: EntryTag; label: string; description: str
 interface EditorPanelProps {
   entry: JournalEntry;
   onUpdate: (updated: Partial<JournalEntry>) => void;
+  /** Called when the user explicitly clicks Save — awaits the real DB flush */
+  onFlush: () => Promise<void>;
 }
 
-export default function EditorPanel({ entry, onUpdate }: EditorPanelProps) {
+export default function EditorPanel({ entry, onUpdate, onFlush }: EditorPanelProps) {
   const [tagDropdownOpen, setTagDropdownOpen] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>('saved');
   const [wordCount, setWordCount] = useState(0);
@@ -27,7 +29,8 @@ export default function EditorPanel({ entry, onUpdate }: EditorPanelProps) {
   const [linkPlanModalOpen, setLinkPlanModalOpen] = useState(false);
   const [linkedPlanTitle, setLinkedPlanTitle] = useState<string | null>(null);
 
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Local timer — drives UI indicator only, does NOT schedule a second write
+  const uiTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tagDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -61,32 +64,36 @@ export default function EditorPanel({ entry, onUpdate }: EditorPanelProps) {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const triggerAutosave = useCallback((updates: Partial<JournalEntry>) => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
+  /** Show "Saving…" then "Saved" after a short delay — purely cosmetic */
+  const triggerUiSaving = useCallback(() => {
     setSaveState('saving');
-    debounceRef.current = setTimeout(() => {
-      onUpdate(updates);
+    if (uiTimerRef.current) clearTimeout(uiTimerRef.current);
+    uiTimerRef.current = setTimeout(() => {
       setSaveState('saved');
-    }, 1200);
-  }, [onUpdate]);
+    }, 1000);
+  }, []);
 
   const handleBodyChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newBody = e.target.value;
+    // Single call — page.tsx debounces the actual DB write
     onUpdate({ body: newBody });
-    setSaveState('saving');
-    triggerAutosave({ body: newBody });
+    triggerUiSaving();
   };
 
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newTitle = e.target.value;
     onUpdate({ title: newTitle });
-    triggerAutosave({ title: newTitle });
+    triggerUiSaving();
   };
 
-  const handleManualSave = () => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
+  const handleManualSave = async () => {
     setSaveState('saving');
-    setTimeout(() => setSaveState('saved'), 600);
+    try {
+      await onFlush();
+      setSaveState('saved');
+    } catch {
+      setSaveState('error');
+    }
   };
 
   const handleTagSelect = (value: EntryTag) => {
@@ -250,66 +257,49 @@ export default function EditorPanel({ entry, onUpdate }: EditorPanelProps) {
             <div
               className="flex-shrink-0"
               style={{
-                width: '52px',
+                width: '40px',
                 borderRight: '2px solid rgba(192,57,43,0.35)',
                 backgroundColor: 'rgba(250,247,240,0.5)',
               }}
             />
 
-            {/* Writing area — lined background only on body section */}
-            <div className="flex-1 flex flex-col">
-              {/* Title — no lines, fixed height */}
-              <div className="px-5 pt-4 pb-2" style={{ borderBottom: '1px solid var(--paper-line)' }}>
-                <input
-                  type="text"
-                  value={entry.title}
-                  onChange={handleTitleChange}
-                  placeholder="Entry title (optional)"
-                  className="w-full text-xl font-semibold font-serif bg-transparent border-none outline-none focus:outline-none placeholder:text-muted-foreground/50"
-                  style={{ color: 'var(--foreground)', lineHeight: '32px', height: '36px' }}
-                />
-              </div>
+            {/* Writing area */}
+            <div className="flex-1 px-5 py-4">
+              {/* Title */}
+              <input
+                type="text"
+                value={entry.title}
+                onChange={handleTitleChange}
+                placeholder="Entry title…"
+                className="w-full text-xl font-semibold font-serif bg-transparent border-none outline-none text-foreground placeholder:text-muted-foreground/50 mb-4"
+              />
 
-              {/* Body textarea — lined background aligned to line-height */}
-              <div
-                className="px-5 pb-8 pt-0"
-                style={{
-                  backgroundImage: 'repeating-linear-gradient(to bottom, transparent, transparent 31px, var(--paper-line) 31px, var(--paper-line) 32px)',
-                  backgroundSize: '100% 32px',
-                  backgroundPositionY: '0px',
-                }}
-              >
+              {/* Ruled lines + textarea */}
+              <div className="relative">
+                {Array.from({ length: 20 }).map((_, i) => (
+                  <div
+                    key={`line-${i}`}
+                    className="absolute w-full border-b border-border/30"
+                    style={{ top: `${(i + 1) * 28}px` }}
+                  />
+                ))}
                 <textarea
                   value={entry.body}
                   onChange={handleBodyChange}
-                  placeholder="Write freely… your thoughts, ideas, and plans for tomorrow."
-                  className="w-full bg-transparent border-none outline-none resize-none font-serif text-base placeholder:text-muted-foreground/40"
-                  style={{
-                    color: 'var(--foreground)',
-                    minHeight: '480px',
-                    lineHeight: '32px',
-                    paddingTop: '8px',
-                    display: 'block',
-                  }}
+                  placeholder="Start writing…"
+                  className="relative w-full bg-transparent border-none outline-none resize-none text-sm font-serif text-foreground placeholder:text-muted-foreground/40 leading-7 z-10"
+                  style={{ minHeight: '560px', lineHeight: '28px' }}
                 />
               </div>
             </div>
-          </div>
-
-          {/* Page footer */}
-          <div
-            className="flex items-center justify-between px-5 py-2 border-t border-border/40"
-            style={{ backgroundColor: 'rgba(92,61,46,0.03)' }}
-          >
-            <span className="text-xs text-muted-foreground font-serif italic">{displayDate}</span>
-            <span className="text-xs text-muted-foreground text-tabular">{wordCount} words</span>
           </div>
         </div>
       </div>
 
       {linkPlanModalOpen && (
         <LinkToPlanModal
-          entry={entry}
+          entryId={entry.id}
+          entryTitle={entry.title}
           onClose={() => setLinkPlanModalOpen(false)}
           onLinked={handlePlanLinked}
         />

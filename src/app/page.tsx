@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import AppLayout from '@/components/AppLayout';
 import EntryListSidebar from './components/EntryListSidebar';
 import EditorPanel from './components/EditorPanel';
@@ -18,6 +18,7 @@ export interface JournalEntry {
   dateLabel: string;
   targetDate?: string;
   isToday?: boolean;
+  planId?: string | null;
 }
 
 function formatDateLabel(dateStr: string): string {
@@ -38,7 +39,136 @@ export default function JournalEntryPage() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const { supabase } = useAuth();
+  const { supabase, user } = useAuth();
+
+  // ─── Pending-edit buffer (single debounced write) ────────────────────────────
+  // Holds the latest partial update that hasn't been flushed to DB yet
+  const pendingEditRef = useRef<{ entryId: string; updates: Partial<JournalEntry> } | null>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Keep a ref to entries so flushPending can read current state without stale closure
+  const entriesRef = useRef<JournalEntry[]>([]);
+  useEffect(() => { entriesRef.current = entries; }, [entries]);
+
+  /** Write the buffered edit to Supabase immediately. Returns a promise. */
+  const flushPending = useCallback(async () => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    const pending = pendingEditRef.current;
+    if (!pending || !supabase) return;
+    pendingEditRef.current = null;
+
+    const { entryId, updates } = pending;
+
+    const dbUpdate: Record<string, unknown> = {};
+    if (updates.title !== undefined) dbUpdate.title = updates.title;
+    if (updates.body !== undefined) dbUpdate.body = updates.body;
+    if (updates.tag !== undefined) dbUpdate.tag = updates.tag;
+    if (updates.targetDate !== undefined) dbUpdate.target_date = updates.targetDate || null;
+    if (updates.dateLabel !== undefined) dbUpdate.date_label = updates.dateLabel;
+
+    const { error } = await supabase
+      .from('journal_entries')
+      .update(dbUpdate)
+      .eq('id', entryId);
+
+    if (error) {
+      console.error('Failed to flush entry update:', error.message);
+      return;
+    }
+
+    // ── Sync idea_tree_nodes (never touch x/y) ──────────────────────────────
+    const nodeUpdate: Record<string, unknown> = {};
+    if (updates.title !== undefined) nodeUpdate.title = updates.title;
+    if (updates.body !== undefined) nodeUpdate.body = updates.body;
+    if (updates.tag !== undefined) nodeUpdate.tag = updates.tag;
+    if (updates.dateLabel !== undefined) nodeUpdate.date_label = updates.dateLabel;
+
+    if (Object.keys(nodeUpdate).length > 0) {
+      await supabase
+        .from('idea_tree_nodes')
+        .update(nodeUpdate)
+        .eq('id', entryId);
+    }
+
+    // ── Sync plans table ────────────────────────────────────────────────────
+    await syncPlanForEntry(entryId);
+  }, [supabase]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Sync the plans table based on current tag for an entry */
+  const syncPlanForEntry = useCallback(async (entryId: string) => {
+    if (!supabase || !user) return;
+
+    // Fetch the current full entry from DB to get accurate state after flush
+    const { data: entryRow } = await supabase
+      .from('journal_entries')
+      .select('id, title, body, tag, target_date, plan_id')
+      .eq('id', entryId)
+      .single();
+
+    if (!entryRow) return;
+
+    const currentTag = entryRow.tag as EntryTag;
+    const planId: string | null = entryRow.plan_id ?? null;
+
+    if (currentTag === 'plan') {
+      const preview = (entryRow.body || '').slice(0, 120);
+      if (!planId) {
+        // Create a new plan row
+        const { data: newPlan, error: planErr } = await supabase
+          .from('plans')
+          .insert({
+            user_id: user.id,
+            title: entryRow.title || 'Untitled Plan',
+            preview,
+            status: 'pending',
+            target_date: entryRow.target_date ?? '',
+            archived: false,
+          })
+          .select('id')
+          .single();
+
+        if (!planErr && newPlan) {
+          await supabase
+            .from('journal_entries')
+            .update({ plan_id: newPlan.id })
+            .eq('id', entryId);
+
+          setEntries((prev) =>
+            prev.map((e) => (e.id === entryId ? { ...e, planId: newPlan.id } : e))
+          );
+        }
+      } else {
+        // Update existing plan — keep title, preview, target_date in sync
+        await supabase
+          .from('plans')
+          .update({
+            title: entryRow.title || 'Untitled Plan',
+            preview,
+            target_date: entryRow.target_date ?? '',
+            archived: false,
+          })
+          .eq('id', planId);
+      }
+    } else {
+      // Tag changed away from 'plan' — soft-archive the linked plan
+      if (planId) {
+        await supabase
+          .from('plans')
+          .update({ archived: true })
+          .eq('id', planId);
+      }
+    }
+  }, [supabase, user]);
+
+  // Flush on unmount so navigating away never loses an in-progress edit
+  useEffect(() => {
+    return () => {
+      // Fire-and-forget on unmount
+      flushPending();
+    };
+  }, [flushPending]);
 
   // Load entries from Supabase
   const loadEntries = useCallback(async (currentSelectedId?: string | null) => {
@@ -67,6 +197,7 @@ export default function JournalEntryPage() {
       dateLabel: row.date_label || formatDateLabel(row.date),
       targetDate: row.target_date ?? undefined,
       isToday: row.is_today ?? false,
+      planId: row.plan_id ?? null,
     }));
 
     setEntries(mapped);
@@ -83,6 +214,9 @@ export default function JournalEntryPage() {
   const selectedEntry = entries.find((e) => e.id === selectedEntryId) ?? entries[0] ?? null;
 
   const handleNewEntry = useCallback(async () => {
+    // Flush any pending edit before switching
+    await flushPending();
+
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0];
     const id = `entry-${Date.now()}`;
@@ -94,6 +228,7 @@ export default function JournalEntryPage() {
       date: dateStr,
       dateLabel: 'Today',
       isToday: true,
+      planId: null,
     };
 
     // Optimistically add to local state immediately so editor opens right away
@@ -115,13 +250,31 @@ export default function JournalEntryPage() {
 
     if (error) {
       console.error('Failed to persist entry:', error.message);
-      // Remove the optimistic entry on failure
       setEntries((prev) => prev.filter((e) => e.id !== id));
       setSelectedEntryId(null);
+      return;
     }
-  }, [supabase]);
 
-  const handleUpdateEntry = useCallback(async (updated: Partial<JournalEntry>) => {
+    // Insert matching idea_tree_nodes row — requires user_id
+    if (user) {
+      const existingCount = entriesRef.current.length;
+      const defaultY = 40 + existingCount * 120;
+      const { error: nodeErr } = await supabase.from('idea_tree_nodes').insert({
+        id: newEntry.id,
+        user_id: user.id,
+        title: newEntry.title,
+        body: newEntry.body,
+        tag: newEntry.tag,
+        date_label: newEntry.dateLabel,
+        x: 80,
+        y: defaultY,
+      });
+      if (nodeErr) console.error('Failed to insert idea_tree_node:', nodeErr.message);
+    }
+  }, [supabase, user, flushPending]);
+
+  /** Called by EditorPanel on every keystroke — buffers the update and debounces the DB write */
+  const handleUpdateEntry = useCallback((updated: Partial<JournalEntry>) => {
     if (!selectedEntryId) return;
 
     // Optimistic update — always apply immediately so UI reflects changes
@@ -129,24 +282,26 @@ export default function JournalEntryPage() {
       prev.map((e) => (e.id === selectedEntryId ? { ...e, ...updated } : e))
     );
 
-    if (!supabase) return;
-
-    const dbUpdate: Record<string, unknown> = {};
-    if (updated.title !== undefined) dbUpdate.title = updated.title;
-    if (updated.body !== undefined) dbUpdate.body = updated.body;
-    if (updated.tag !== undefined) dbUpdate.tag = updated.tag;
-    if (updated.targetDate !== undefined) dbUpdate.target_date = updated.targetDate || null;
-    if (updated.dateLabel !== undefined) dbUpdate.date_label = updated.dateLabel;
-
-    const { error } = await supabase
-      .from('journal_entries')
-      .update(dbUpdate)
-      .eq('id', selectedEntryId);
-
-    if (error) {
-      console.error('Failed to update entry:', error.message);
+    // Buffer the latest update (merge with any existing pending update for this entry)
+    if (pendingEditRef.current && pendingEditRef.current.entryId === selectedEntryId) {
+      pendingEditRef.current.updates = { ...pendingEditRef.current.updates, ...updated };
+    } else {
+      pendingEditRef.current = { entryId: selectedEntryId, updates: { ...updated } };
     }
-  }, [supabase, selectedEntryId]);
+
+    // Reset debounce timer — single write fires 800ms after the last keystroke
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      flushPending();
+    }, 800);
+  }, [selectedEntryId, flushPending]);
+
+  /** Flush before switching entries so no edit is lost */
+  const handleSelectEntry = useCallback(async (id: string) => {
+    if (id === selectedEntryId) return;
+    await flushPending();
+    setSelectedEntryId(id);
+  }, [selectedEntryId, flushPending]);
 
   if (loading) {
     return (
@@ -164,7 +319,7 @@ export default function JournalEntryPage() {
         <EntryListSidebar
           entries={entries}
           selectedEntryId={selectedEntryId ?? ''}
-          onSelectEntry={setSelectedEntryId}
+          onSelectEntry={handleSelectEntry}
           onNewEntry={handleNewEntry}
         />
         {selectedEntry ? (
@@ -172,6 +327,7 @@ export default function JournalEntryPage() {
             <EditorPanel
               entry={selectedEntry}
               onUpdate={handleUpdateEntry}
+              onFlush={flushPending}
             />
             <LinkPanel entries={entries} currentEntryId={selectedEntryId ?? ''} />
           </>
