@@ -122,12 +122,14 @@ export default function JournalEntryPage() {
   }, [supabase]);
 
   const handleUpdateEntry = useCallback(async (updated: Partial<JournalEntry>) => {
-    if (!selectedEntryId || !supabase) return;
+    if (!selectedEntryId) return;
 
-    // Optimistic update
+    // Optimistic update — always apply immediately so UI reflects changes
     setEntries((prev) =>
       prev.map((e) => (e.id === selectedEntryId ? { ...e, ...updated } : e))
     );
+
+    if (!supabase) return;
 
     const dbUpdate: Record<string, unknown> = {};
     if (updated.title !== undefined) dbUpdate.title = updated.title;
