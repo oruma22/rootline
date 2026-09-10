@@ -38,19 +38,13 @@ export default function JournalEntryPage() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const { user, supabase, loading: authLoading } = useAuth();
+  const { supabase, loading: authLoading } = useAuth();
 
   // Load entries from Supabase
   const loadEntries = useCallback(async (currentSelectedId?: string | null) => {
-    if (!user) {
-      setLoading(false);
-      return;
-    }
-
     const { data, error } = await supabase
       .from('journal_entries')
       .select('*')
-      .eq('user_id', user.id)
       .order('date', { ascending: false })
       .order('created_at', { ascending: false });
 
@@ -76,7 +70,7 @@ export default function JournalEntryPage() {
       setSelectedEntryId(mapped[0].id);
     }
     setLoading(false);
-  }, [supabase, user]);
+  }, [supabase]);
 
   useEffect(() => {
     if (!authLoading) {
@@ -87,11 +81,6 @@ export default function JournalEntryPage() {
   const selectedEntry = entries.find((e) => e.id === selectedEntryId) ?? entries[0] ?? null;
 
   const handleNewEntry = useCallback(async () => {
-    if (!user) {
-      console.error('Cannot create entry: user not authenticated');
-      return;
-    }
-
     const now = new Date();
     const dateStr = now.toISOString().split('T')[0];
     const id = `entry-${Date.now()}`;
@@ -112,7 +101,6 @@ export default function JournalEntryPage() {
     // Persist to Supabase in the background
     const { error } = await supabase.from('journal_entries').insert({
       id: newEntry.id,
-      user_id: user.id,
       title: newEntry.title,
       body: newEntry.body,
       tag: newEntry.tag,
@@ -128,7 +116,7 @@ export default function JournalEntryPage() {
       setEntries((prev) => prev.filter((e) => e.id !== id));
       setSelectedEntryId(null);
     }
-  }, [supabase, user]);
+  }, [supabase]);
 
   const handleUpdateEntry = useCallback(async (updated: Partial<JournalEntry>) => {
     if (!selectedEntryId) return;
@@ -137,8 +125,6 @@ export default function JournalEntryPage() {
     setEntries((prev) =>
       prev.map((e) => (e.id === selectedEntryId ? { ...e, ...updated } : e))
     );
-
-    if (!user) return;
 
     const dbUpdate: Record<string, unknown> = {};
     if (updated.title !== undefined) dbUpdate.title = updated.title;
@@ -150,13 +136,12 @@ export default function JournalEntryPage() {
     const { error } = await supabase
       .from('journal_entries')
       .update(dbUpdate)
-      .eq('id', selectedEntryId)
-      .eq('user_id', user.id);
+      .eq('id', selectedEntryId);
 
     if (error) {
       console.error('Failed to update entry:', error.message);
     }
-  }, [supabase, selectedEntryId, user]);
+  }, [supabase, selectedEntryId]);
 
   if (authLoading || loading) {
     return (
