@@ -1,11 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import AppLayout from '@/components/AppLayout';
 import EntryListSidebar from './components/EntryListSidebar';
 import EditorPanel from './components/EditorPanel';
 import LinkPanel from './components/LinkPanel';
-import { createClient } from '../lib/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 
 export type EntryTag = 'idea' | 'thought' | 'plan';
@@ -39,8 +38,7 @@ export default function JournalEntryPage() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const { user, supabase: authSupabase } = useAuth();
-  const supabase = useMemo(() => authSupabase || createClient(), [authSupabase]);
+  const { user, supabase, loading: authLoading } = useAuth();
 
   // Load entries from Supabase
   const loadEntries = useCallback(async (currentSelectedId?: string | null) => {
@@ -81,8 +79,10 @@ export default function JournalEntryPage() {
   }, [supabase, user]);
 
   useEffect(() => {
-    loadEntries(null);
-  }, [loadEntries]);
+    if (!authLoading) {
+      loadEntries(null);
+    }
+  }, [authLoading, loadEntries]);
 
   const selectedEntry = entries.find((e) => e.id === selectedEntryId) ?? entries[0] ?? null;
 
@@ -158,7 +158,7 @@ export default function JournalEntryPage() {
     }
   }, [supabase, selectedEntryId, user]);
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <AppLayout onNewEntry={handleNewEntry}>
         <div className="flex h-full items-center justify-center">
