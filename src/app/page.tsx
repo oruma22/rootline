@@ -39,8 +39,8 @@ export default function JournalEntryPage() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const supabase = useMemo(() => createClient(), []);
-  const { user } = useAuth();
+  const { user, supabase: authSupabase } = useAuth();
+  const supabase = useMemo(() => authSupabase || createClient(), [authSupabase]);
 
   // Load entries from Supabase
   const loadEntries = useCallback(async (currentSelectedId?: string | null) => {
